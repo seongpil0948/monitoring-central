@@ -1,0 +1,318 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "0.0.0.0:4317"
+      http:
+        endpoint: "0.0.0.0:4318"
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: "apisix"
+          scrape_interval: 15s # This value will be related to the time range of the rate function in Prometheus QL. The time range in the rate function should be at least twice this value.
+          metrics_path: "/apisix/prometheus/metrics"
+          static_configs:
+            - targets: 
+              - 10.101.99.100:9091
+              - 10.101.99.101:9091
+        # 1. Redis 인스턴스들의 지표를 수집하기 위한 job
+        - job_name: 'redis_exporter_targets'
+          static_configs:
+            - targets:
+                - redis://10.101.99.97:7000
+                - redis://10.101.99.98:7001
+                - redis://10.101.99.99:7002
+          metrics_path: /scrape
+          relabel_configs:
+            # 원래의 __address__ 값을 HTTP 쿼리 파라미터 "target"으로 전달
+            - source_labels: [__address__]
+              target_label: __param_target
+            # 쿼리 파라미터 값을 "instance" 라벨로 설정 (대시보드 등에서 식별 용도)
+            - source_labels: [__param_target]
+              target_label: instance
+            # 실제 HTTP 요청은 Exporter가 동작 중인 호스트로 보내도록 __address__를 변경
+            - target_label: __address__
+              replacement: 10.101.99.97:9121
+
+        # 2. Exporter 자체의 메트릭을 스크랩하기 위한 job (옵션)
+        - job_name: 'redis_exporter'
+          static_configs:
+            - targets:
+                - 10.101.99.97:9121
+
+        - job_name: "node"
+          scrape_interval: 5s
+          # metrics_path: '/custom_metrics'
+          # service discovery files, periodically reloads the targets
+          file_sd_configs:
+            - files:
+                - "/etc/node_targets.yaml"
+          relabel_configs:
+            - source_labels: [hostname]
+              regex: "(AIR-WORKER).*"
+              target_label: group
+              replacement: "$1"
+            - source_labels: [hostname]
+              regex: "(GW-PROD).*"
+              target_label: group
+              replacement: "$1"
+            - source_labels: [hostname]
+              regex: "(AIR-WEB-PROD).*"
+              target_label: group
+              replacement: "$1"
+
+
+processors:
+  batch: {}
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 400
+    spike_limit_mib: 200
+
+  # health‑check 관련 로그 필터 (본문에 "health-check" 또는 "health_check" 포함)
+  filter/health_logs:
+    error_mode: ignore
+    logs:
+      log_record:
+        - 'IsMatch(body, ".*health[-_]?check.*")'
+
+  # health‑check 관련 트레이스 필터 (스팬 이름에 "health-check" 또는 "health_check" 포함)
+  filter/health_traces:
+    error_mode: ignore
+    traces:
+      span:
+        - 'IsMatch(name, ".*health[-_]?check.*")'
+
+  # health‑check 관련 메트릭 필터 (메트릭 이름에 "health-check" 또는 "health_check" 포함)
+  filter/health_metrics:
+    error_mode: ignore
+    metrics:
+      metric:
+        - 'IsMatch(name, ".*health[-_]?check.*")'
+
+connectors:
+  # 로그 라우팅: resource 속성의 env 값이 dev 또는 prod 인 경우에만 전달.
+  routing/logs:
+    # 조건에 매칭되지 않는 항목은 기본(discard) 파이프라인으로 전달하여 폐기합니다.
+    default_pipelines: [logs/discard]
+    table:
+      - context: resource
+        condition: 'attributes["env"] == "dev"'
+        pipelines: [logs/dev]
+      - context: resource
+        condition: 'attributes["env"] == "prod"'
+        pipelines: [logs/prod]
+
+  # 메트릭 라우팅
+  routing/metrics:
+    default_pipelines: [metrics/discard]
+    table:
+      - context: resource
+        condition: 'attributes["service.name"] == "Airflow" or attributes["service.name"] == "apisix"'
+        pipelines: [metrics/prod]    
+      - context: resource
+        condition: 'attributes["env"] == "dev"'
+        pipelines: [metrics/dev]
+      - context: resource
+        condition: 'attributes["env"] == "prod"'
+        pipelines: [metrics/prod]
+
+  # 트레이스 라우팅
+  routing/traces:
+    default_pipelines: [traces/discard]
+    table:
+      - context: resource
+        condition: 'attributes["service.name"] == "airflow" or attributes["service.name"] == "apisix"'
+        pipelines: [traces/dev]        
+      - context: resource
+        condition: 'attributes["env"] == "dev"'
+        pipelines: [traces/dev]
+      - context: resource
+        condition: 'attributes["env"] == "prod"'
+        pipelines: [traces/prod]
+
+exporters:
+  # dev 환경용 파일 exporter 예시
+  file/logs/dev:
+    path: "/tmp/signal-data/logs_dev.log"
+    rotation:
+      max_megabytes: 10
+      max_days: 3
+      max_backups: 3
+      localtime: true
+  file/metrics/dev:
+    path: "/tmp/signal-data/metrics_dev.json"
+    rotation:
+      max_megabytes: 10
+      max_days: 3
+      max_backups: 3
+      localtime: true    
+  file/metrics/prom:
+    path: "/tmp/signal-data/metrics_prom.json"
+    rotation:
+      max_megabytes: 10
+      max_days: 3
+      max_backups: 3
+      localtime: true    
+  file/traces/dev:
+    path: "/tmp/signal-data/traces_dev.json"
+    rotation:
+      max_megabytes: 10
+      max_days: 3
+      max_backups: 3
+      localtime: true    
+
+  # prod 환경용 파일 exporter 예시
+  file/logs/prod:
+    path: "/tmp/signal-data/logs_prod.log"
+    rotation:
+      max_megabytes: 10
+      max_days: 3
+      max_backups: 3
+      localtime: true    
+  file/metrics/prod:
+    path: "/tmp/signal-data/metrics_prod.json"
+    rotation:
+      max_megabytes: 10
+      max_days: 3
+      max_backups: 3
+      localtime: true    
+  file/traces/prod:
+    path: "/tmp/signal-data/traces_prod.json"
+    rotation:
+      max_megabytes: 10
+      max_days: 3
+      max_backups: 3
+      localtime: true    
+
+  otlp/traces/tempo:
+    endpoint: "http://tempo:4317"
+    tls:
+      insecure: true
+
+  awsxray:
+    region: "ap-northeast-2"
+
+  awss3/logs/temp:
+    s3uploader:
+        region: 'ap-northeast-2'
+        s3_bucket: 'theshop-lake'
+        s3_prefix: 'logs/onpremise/apisix/temp'
+        s3_partition: 'minute'
+    sending_queue:
+      enabled: true
+      num_consumers: 10
+      queue_size: 100        
+  awss3/logs/prod:
+    s3uploader:
+        region: 'ap-northeast-2'
+        s3_bucket: 'theshop-lake'
+        s3_prefix: 'logs/onpremise/apisix/prod'
+        s3_partition: 'minute'
+
+  # prometheusremotewrite:
+  #   endpoint: "http://prometheus:9090/api/v1/write"
+  #   tls:
+  #     insecure: true
+  otlphttp/prom:
+    endpoint: "http://prometheus3:9090/api/v1/otlp"
+    tls:
+      insecure: true
+
+  otlphttp/logs:
+    endpoint: "http://loki:3100/otlp"
+    tls:
+      insecure: true
+      
+  debug/basic:
+    verbosity: basic
+    sampling_initial: 1
+    sampling_thereafter: 10
+
+  debug/detail:
+    verbosity: detailed
+    sampling_initial: 10
+    sampling_thereafter: 1
+
+  # 매칭되지 않은 항목은 nop exporter를 통해 폐기합니다.
+  nop:
+    # 단순 폐기용 exporter
+
+service:
+  pipelines:
+    #################################################################
+    # 로그 파이프라인
+    #################################################################
+    logs/in:
+      receivers: [otlp]
+      processors: [memory_limiter, filter/health_logs, batch]
+      exporters: [routing/logs, file/logs/dev]
+    logs/dev:
+      receivers: [routing/logs]
+      processors: [batch]
+      exporters: [file/logs/dev, otlphttp/logs, awss3/logs/temp]
+    logs/prod:
+      receivers: [routing/logs]
+      processors: [batch]
+      exporters: [file/logs/prod, otlphttp/logs, awss3/logs/prod]
+    logs/discard:
+      receivers: [routing/logs]
+      processors: [batch]
+      exporters: [nop]
+
+    #################################################################
+    # 메트릭 파이프라인
+    #################################################################
+    metrics/prom:
+      receivers: [prometheus]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/prom, file/metrics/prom]
+    metrics/in:
+      receivers: [otlp]
+      processors: [memory_limiter, filter/health_metrics, batch]
+      exporters: [routing/metrics, file/metrics/dev]
+    metrics/dev:
+      receivers: [routing/metrics]
+      processors: [batch]
+      exporters: [file/metrics/dev]
+    metrics/prod:
+      receivers: [routing/metrics]
+      processors: [batch]
+      exporters: [file/metrics/prod, otlphttp/prom]
+    metrics/discard:
+      receivers: [routing/metrics]
+      processors: [batch]
+      exporters: [nop]
+
+    #################################################################
+    # 트레이스 파이프라인
+    #################################################################
+    traces/in:
+      receivers: [otlp]
+      processors: [memory_limiter, filter/health_traces, batch]
+      exporters: [routing/traces]
+    traces/dev:
+      receivers: [routing/traces]
+      processors: [batch]
+      exporters: [file/traces/dev, otlp/traces/tempo]
+    traces/prod:
+      receivers: [routing/traces]
+      processors: [batch]
+      exporters: [file/traces/prod, awsxray, otlp/traces/tempo]
+    traces/discard:
+      receivers: [routing/traces]
+      processors: [batch]
+      exporters: [nop, otlp/traces/tempo]
+
+  extensions: [health_check, pprof, zpages]
+  telemetry:
+    logs:
+      level: debug
+
+extensions:
+  health_check:
+    endpoint: "0.0.0.0:13133"
+  pprof:
+    endpoint: "0.0.0.0:1777"
+  zpages:
+    endpoint: "0.0.0.0:55679"

@@ -1,0 +1,132 @@
+version: "3"
+
+services:
+  loki:
+    container_name: grafana-loki
+    image: grafana/loki:3.4
+    user: root
+    mem_limit: "8g"
+    memswap_limit: "16g"
+    volumes:
+      - /data/grafana/config:/mnt/config
+      - /data/grafana/loki:/tmp/loki
+    ports:
+      - "3100:3100"
+    command: -config.file=/mnt/config/loki-config.yaml
+    networks:
+      - dev_net
+
+  promtail:
+    container_name: loki-promtail
+    image: grafana/promtail:3.4
+    user: root
+    mem_limit: "4g"
+    memswap_limit: "8g"
+    ports:
+      - "1514:1514"
+    volumes:
+      - /var/log:/var/log
+      - /data/grafana/config:/mnt/config 
+      - /var/log/journal/:/var/log/journal/ 
+      - /run/log/journal/:/run/log/journal/ 
+      - /etc/machine-id:/etc/machine-id 
+    command: -config.file=/mnt/config/promtail-config.yaml
+    networks:
+      - dev_net
+
+  grafana:
+    container_name: grafana
+    image: grafana/grafana:11.5.2
+    user: root
+    mem_limit: "2g"
+    memswap_limit: "4g"
+    volumes:
+      - /data/grafana/grafana_data:/var/lib/grafana
+    networks:
+      - dev_net
+    ports:
+      - 3000:3000
+
+  influxdb:
+    image: influxdb:2.7.11-alpine
+    container_name: influxdb
+    restart: always
+    ports:
+      - 8086:8086
+    networks:
+      - dev_net
+    volumes:
+      - /data/grafana/influxdb:/var/lib/influxdb2
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: otel-collector
+    command: ["--config=/etc/otel-collector-config.yaml"]     
+    mem_limit: "16g"
+    memswap_limit: "18g"    
+    env_file:
+      - .env
+    volumes:
+      - /data/grafana/otel/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+      - /data/grafana/otel/signal-data:/tmp/signal-data:rw,z
+      - /data/grafana/otel/node_targets.yaml:/etc/node_targets.yaml:ro
+    ports:
+      - "4317:4317"    # OTLP gRPC
+      - "4318:4318"    # OTLP HTTP
+      - "8888:8888"    # Collector 메트릭 (Prometheus 스크랩)
+      - "13133:13133"  # health_check extension(http://10.101.91.145:13133/healthz)
+      - "1777:1777"    # pprof extension (http://10.101.91.145:1777/debug/pprof)
+      - "55679:55679"  # zpages extension(http://10.101.91.145:55679/debug/servicez)
+      - "9093:9090"
+
+  prometheus:
+    image: prom/prometheus:v3.2.0
+    container_name: prometheus3
+    mem_limit: "4g"
+    memswap_limit: "8g"        
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yaml'
+      - '--web.enable-remote-write-receiver'
+      - '--web.enable-otlp-receiver'    
+    volumes:
+      - ./prometheus3/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+      - ./prometheus3/data:/prometheus
+    ports:
+      - "9092:9090"
+
+  init-tempo:
+    image: &tempoImage grafana/tempo:main-1b7a088
+    user: root
+    entrypoint:
+      - "chown"
+      - "10001:10001"
+      - "/var/tempo"
+    volumes:
+      - ./tempo-data:/var/tempo
+
+  tempo:
+    image: *tempoImage
+    command: [ "-config.file=/etc/tempo.yaml" ]
+    volumes:
+      - /data/grafana/config/tempo-config.yaml:/etc/tempo.yaml
+      - ./tempo-data:/var/tempo
+    ports:
+      - "3200:3200" # tempo
+      - "4319:4317" # otlp grpc
+    depends_on:
+      - init-tempo
+
+  # >>> For Testing >>>
+  k6-tracing:
+    image: ghcr.io/grafana/xk6-client-tracing:v0.0.5
+    container_name: k6-tracing
+    environment:
+      - ENDPOINT=otel-collector:4317
+    restart: always
+    depends_on:
+      - otel-collector
+  # <<< For Testing <<<      
+
+networks:
+  dev_net:
+    external: true

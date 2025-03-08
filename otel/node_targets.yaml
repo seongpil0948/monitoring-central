@@ -1,0 +1,46 @@
+- targets:
+    - "10.101.99.95:9100"
+  labels:
+    hostname: "AIR-WEB-PROD-1"
+    group: "AIR-WEB-PROD"
+- targets:
+    - "10.101.99.95:9100"
+  labels:
+    hostname: "AIR-WEB-PROD-1"
+    group: "AIR-WEB-PROD"
+
+- targets:
+    - "10.101.99.96:9100"
+  labels:
+    hostname: "AIR-WEB-PROD-2"
+    group: "AIR-WEB-PROD"
+
+- targets:
+    - "10.101.99.97:9100"
+  labels:
+    hostname: "AIR-WORKER-1"
+    group: "AIR-WORKER"
+
+- targets:
+    - "10.101.99.98:9100"
+  labels:
+    hostname: "AIR-WORKER-2"
+    group: "AIR-WORKER"
+
+- targets:
+    - "10.101.99.99:9100"
+  labels:
+    hostname: "AIR-WORKER-3"
+    group: "AIR-WORKER"
+
+- targets:
+    - "10.101.99.100:9100"
+  labels:
+    hostname: "GW-PROD-1"
+    group: "GW-PROD"
+
+- targets:
+    - "10.101.99.101:9100"
+  labels:
+    hostname: "GW-PROD-2"
+    group: "GW-PROD"

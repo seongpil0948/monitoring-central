@@ -1,0 +1,20 @@
+# 환경변수 파일 (민감 정보가 포함될 수 있으므로)
+.env
+
+# Loki 관련 실행 데이터 (실행 시 생성되는 캐시, WAL, 등)
+loki/
+
+# Grafana 실행 데이터 (DB, 플러그인, pdf, csv 등)
+grafana_data/
+
+# InfluxDB 실행 데이터
+influxdb/
+
+# Prometheus 데이터 (실행 시 생성되는 메트릭 저장소 등)
+prometheus3/data/
+
+# Otel의 실행 데이터 (예: signal-data 등)
+otel/signal-data/
+
+# 운영체제에서 생성되는 임시 파일 (macOS 예시)
+.DS_Store
